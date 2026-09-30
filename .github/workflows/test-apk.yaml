@@ -56,6 +56,7 @@ jobs:
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
+        id: ndk
         with:
           ndk-version: r28c
           add-to-path: true
@@ -74,6 +75,8 @@ jobs:
           git checkout -- pubspec.yaml
 
       - name: Build the ARM64 test APK
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: flutter build apk --release --target-platform android-arm64 --dart-define=APP_ENV=dev
 
       - name: Verify APK signing and contents
