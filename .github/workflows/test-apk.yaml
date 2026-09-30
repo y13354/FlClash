@@ -1,0 +1,97 @@
+name: Network refresh test APK
+
+on:
+  push:
+    branches: [apk-network-refresh-test]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache-dependency-path: core/go.sum
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plugins/rust_api/rust
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: master
+          flutter-version: '3.47.1'
+          cache: true
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28c
+          add-to-path: true
+          link-to-sdk: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate code and verify the refresh feature
+        run: |
+          yq -i '.hooks.user_defines.setup.build_assets = false | .hooks.user_defines.rust_api.build_assets = false' pubspec.yaml
+          dart run build_runner build --delete-conflicting-outputs
+          dart format lib/providers/app.dart lib/views/dashboard/widgets/network_detection.dart test/providers/app_test.dart test/widgets/network_detection_test.dart
+          flutter analyze --no-fatal-infos lib/providers/app.dart lib/views/dashboard/widgets/network_detection.dart test/providers/app_test.dart test/widgets/network_detection_test.dart
+          flutter test test/providers/app_test.dart test/widgets/network_detection_test.dart --reporter expanded
+          git checkout -- pubspec.yaml
+
+      - name: Build the ARM64 test APK
+        run: flutter build apk --release --target-platform android-arm64 --dart-define=APP_ENV=dev
+
+      - name: Verify APK signing and contents
+        run: |
+          apk=build/app/outputs/flutter-apk/app-release.apk
+          tools="$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -n 1)"
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/aapt" dump badging "$apk" | head -n 1
+          unzip -l "$apk" | grep -E 'lib/arm64-v8a/(libclash|librust_api|libapp|libflutter)\.so'
+          mkdir -p test-apk
+          cp "$apk" test-apk/FlClash-network-refresh-arm64-test.apk
+          sha256sum test-apk/*.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlClash-network-refresh-arm64-test
+          path: test-apk/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
